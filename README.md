@@ -38,7 +38,7 @@
 flowchart TB
     subgraph Users["사용자"]
         InternalUser["내부 사용자<br/>(사내 직원)"]
-        ExternalUser["외부 사용자<br/>(광고주/대행사)"]
+        ExternalUser["외부 사용자<br/>(외부 고객/파트너)"]
     end
 
     subgraph Clients["App Clients"]
@@ -282,10 +282,10 @@ cp config.env.example config.env
 | Attribute | 용도 | 예시 값 |
 |-----------|------|--------|
 | `custom:user_type` | 내부/외부 사용자 구분 | `internal`, `external` |
-| `custom:company_name` | 광고주/대행사 회사명 | `ABC광고` |
+| `custom:company_name` | 외부 고객/파트너 회사명 | `ABC Company` |
 | `custom:employee_id` | 사번 (내부 사용자) | `EMP001` |
 | `custom:approval_status` | 승인 상태 | `pending`, `approved` |
-| `custom:is_agency` | 대행사 여부 | `true`, `false` |
+| `custom:is_agency` | 파트너사 여부 | `true`, `false` |
 
 **참고 문서:**
 - [Creating a user pool](https://docs.aws.amazon.com/cognito/latest/developerguide/cognito-user-pool-as-user-directory.html)
@@ -365,7 +365,7 @@ cp config.env.example config.env
 |-------|------------|------|
 | `admin-group` | 1 | 운영 관리자 |
 | `internal-users` | 10 | 내부 직원 |
-| `external-users` | 20 | 외부 광고주/대행사 |
+| `external-users` | 20 | 외부 외부 고객/파트너 |
 | `pending-approval` | 30 | 승인 대기 |
 
 **참고 문서:**
@@ -818,6 +818,94 @@ INTERNAL_EMAIL_DOMAINS=your-company.co.kr
 - **모든 회원가입이 차단됩니다** (보안 기본값)
 - Lambda 로그에 경고 메시지가 기록됩니다
 - 관리자가 직접 생성한 계정(AdminCreateUser)은 영향 없음
+
+### AWS WAF 적용 (권장)
+
+외부 사용자 가입을 허용하는 경우, Cognito User Pool에 WAF를 연결하여 추가 보안을 적용할 수 있습니다.
+
+```mermaid
+flowchart LR
+    A[사용자] --> B[AWS WAF]
+    B --> C[Cognito User Pool]
+    C --> D[Lambda Triggers]
+
+    B -->|차단| E[Bot/DDoS/악성IP]
+```
+
+#### WAF 연결 방법
+
+```bash
+# Cognito User Pool에 WAF Web ACL 연결
+aws wafv2 associate-web-acl \
+  --web-acl-arn "arn:aws:wafv2:ap-northeast-2:${AWS_ACCOUNT_ID}:regional/webacl/cognito-protection/xxx" \
+  --resource-arn "${USER_POOL_ARN}"
+```
+
+#### 권장 WAF 규칙
+
+| 규칙 | 목적 | 설정 예시 |
+|------|------|----------|
+| Rate Limiting | 무차별 로그인 시도 방지 | IP당 분당 100회 제한 |
+| AWS Managed Rules | 일반 웹 공격 방지 | `AWSManagedRulesCommonRuleSet` |
+| Bot Control | 자동화된 봇 차단 | `AWSManagedRulesBotControlRuleSet` |
+| IP Reputation | 알려진 악성 IP 차단 | `AWSManagedRulesAmazonIpReputationList` |
+
+### Cognito Quota 관리
+
+#### 가상 고객의 케이스 검토
+
+```
+예상 규모:
+- 내부 직원: ~수백 명
+- 외부 사용자: ~수천 명
+- 동시 로그인 피크: 업무 시작 시간 (예: 오전 9시)
+```
+
+#### 주요 Quota Limits
+
+| 항목 | 기본 한도 | 수천 명 규모 | 증설 필요 |
+|------|----------|-------------|----------|
+| UserAuthentication (로그인) | 120 RPS | 여유 있음 | 모니터링 후 판단 |
+| UserCreation (가입) | 50 RPS | 여유 있음 | 불필요 |
+| TokenRefresh (토큰 갱신) | 120 RPS | 여유 있음 | 모니터링 후 판단 |
+| Users per Pool | 40,000,000 | 여유 있음 | 불필요 |
+| Lambda Trigger Timeout | **5초 (고정)** | - | 변경 불가 |
+
+> **참고**: 수천 명 수준에서는 대부분 기본 한도로 충분합니다. 단, 피크 시간대 모니터링은 필수입니다.
+
+#### CloudWatch 모니터링 설정 (권장)
+
+```bash
+# Throttling 발생 시 알람
+aws cloudwatch put-metric-alarm \
+  --alarm-name "Cognito-Throttling-Alert" \
+  --metric-name "ThrottleCount" \
+  --namespace "AWS/Cognito" \
+  --statistic Sum \
+  --period 300 \
+  --threshold 10 \
+  --comparison-operator GreaterThanThreshold \
+  --evaluation-periods 1 \
+  --alarm-actions "arn:aws:sns:ap-northeast-2:${AWS_ACCOUNT_ID}:alerts"
+```
+
+#### Quota 증설 요청 방법
+
+```bash
+# 현재 Quota 확인
+aws service-quotas get-service-quota \
+  --service-code cognito-idp \
+  --quota-code L-XXXXX
+
+# AWS Console > Service Quotas > Amazon Cognito에서 증설 요청
+```
+
+### 운영 체크리스트
+
+- [ ] WAF Web ACL이 User Pool에 연결되어 있는지 확인
+- [ ] CloudWatch 알람이 설정되어 있는지 확인 (Throttling, 로그인 실패)
+- [ ] Lambda Trigger에서 외부 API 호출 없는지 확인 (5초 타임아웃 제한)
+- [ ] 피크 시간대 모니터링 대시보드 구성
 
 ---
 

@@ -52,7 +52,7 @@ def lambda_handler(event, context):
     user_type = user_attributes.get('custom:user_type', 'unknown')
     claims_to_add['user_type'] = user_type
 
-    # 대행사 여부
+    # 파트너사 여부
     is_agency = user_attributes.get('custom:is_agency', 'false')
     claims_to_add['is_agency'] = is_agency
 

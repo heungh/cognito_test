@@ -8,8 +8,8 @@
 # - 4명의 테스트 사용자 생성
 #   1) 내부 직원
 #   2) 관리자
-#   3) 외부 광고주 (승인 완료)
-#   4) 외부 대행사 (승인 대기)
+#   3) 외부 고객 (승인 완료)
+#   4) 외부 파트너 (승인 대기)
 # - 각 사용자를 적절한 그룹에 할당
 #
 # Admin API 사용:
@@ -99,10 +99,10 @@ aws cognito-idp admin-add-user-to-group \
 echo "   ✅ 관리자 생성 완료 → admin-group, internal-users 그룹"
 
 # ---------------------------------------------
-# 사용자 3: 외부 광고주 (승인 완료)
+# 사용자 3: 외부 고객 (승인 완료)
 # ---------------------------------------------
 echo ""
-echo "3. Creating external advertiser (${TEST_EXTERNAL_ADVERTISER_EMAIL})..."
+echo "3. Creating external customer (${TEST_EXTERNAL_ADVERTISER_EMAIL})..."
 
 aws cognito-idp admin-create-user \
   --user-pool-id "${USER_POOL_ID}" \
@@ -125,13 +125,13 @@ aws cognito-idp admin-add-user-to-group \
   --group-name "external-users" \
   --region "${AWS_REGION}"
 
-echo "   ✅ 외부 광고주 생성 완료 → external-users 그룹"
+echo "   ✅ 외부 고객 생성 완료 → external-users 그룹"
 
 # ---------------------------------------------
-# 사용자 4: 외부 대행사 (승인 대기)
+# 사용자 4: 외부 파트너 (승인 대기)
 # ---------------------------------------------
 echo ""
-echo "4. Creating external agency - pending approval (${TEST_EXTERNAL_AGENCY_EMAIL})..."
+echo "4. Creating external partner - pending approval (${TEST_EXTERNAL_AGENCY_EMAIL})..."
 
 aws cognito-idp admin-create-user \
   --user-pool-id "${USER_POOL_ID}" \
@@ -154,7 +154,7 @@ aws cognito-idp admin-add-user-to-group \
   --group-name "pending-approval" \
   --region "${AWS_REGION}"
 
-echo "   ✅ 외부 대행사 생성 완료 → pending-approval 그룹"
+echo "   ✅ 외부 파트너 생성 완료 → pending-approval 그룹"
 
 echo ""
 echo "=========================================="

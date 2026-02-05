@@ -8,7 +8,7 @@
 # - 4개의 사용자 그룹 생성
 #   1) admin-group: 운영 관리자
 #   2) internal-users: 내부 직원
-#   3) external-users: 외부 사용자 (광고주/대행사)
+#   3) external-users: 외부 사용자 (외부 고객/파트너)
 #   4) pending-approval: 승인 대기 사용자
 #
 # Precedence 설명:
@@ -76,7 +76,7 @@ echo "3. Creating external-users..."
 aws cognito-idp create-group \
   --group-name "external-users" \
   --user-pool-id "${USER_POOL_ID}" \
-  --description "외부 사용자 (광고주/대행사)" \
+  --description "외부 사용자 (외부 고객/파트너)" \
   --precedence 20 \
   --region "${AWS_REGION}"
 
@@ -106,7 +106,7 @@ echo "| Group Name       | Precedence | 용도                    |"
 echo "|------------------|------------|-------------------------|"
 echo "| admin-group      | 1          | 운영 관리자             |"
 echo "| internal-users   | 10         | 내부 직원               |"
-echo "| external-users   | 20         | 외부 광고주/대행사      |"
+echo "| external-users   | 20         | 외부 외부 고객/파트너      |"
 echo "| pending-approval | 30         | 승인 대기               |"
 echo ""
 echo "ID Token 예시 (cognito:groups 클레임):"

@@ -9,6 +9,7 @@
 # - Custom Attributes 5개 추가 (user_type, company_name, employee_id, approval_status, is_agency)
 # - 비밀번호 정책 설정
 # - 이메일 자동 인증 설정
+# - 자가등록 허용 (Pre-Sign-Up Lambda로 도메인 검증 필수)
 #
 # 참고 문서:
 # - https://docs.aws.amazon.com/cognito/latest/developerguide/cognito-user-pool-as-user-directory.html
@@ -121,7 +122,11 @@ USER_POOL_RESULT=$(aws cognito-idp create-user-pool \
     }
   ]' \
   --admin-create-user-config '{
-    "AllowAdminCreateUserOnly": false
+    "AllowAdminCreateUserOnly": false,
+    "InviteMessageTemplate": {
+      "EmailSubject": "계정이 생성되었습니다",
+      "EmailMessage": "안녕하세요, {username}님. 임시 비밀번호는 {####} 입니다. 첫 로그인 시 비밀번호를 변경해주세요."
+    }
   }' \
   --account-recovery-setting '{
     "RecoveryMechanisms": [
@@ -154,9 +159,9 @@ EOF
 echo ""
 echo "생성된 Custom Attributes:"
 echo "  - custom:user_type      : 내부/외부 사용자 구분"
-echo "  - custom:company_name   : 광고주/대행사 회사명"
+echo "  - custom:company_name   : 외부 고객/파트너 회사명"
 echo "  - custom:employee_id    : 사번 (내부 사용자)"
 echo "  - custom:approval_status: 승인 상태 (pending/approved)"
-echo "  - custom:is_agency      : 대행사 여부 (true/false)"
+echo "  - custom:is_agency      : 파트너사 여부 (true/false)"
 echo ""
 echo "다음 단계: ./02-create-domain.sh"
