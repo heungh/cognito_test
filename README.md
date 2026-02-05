@@ -11,6 +11,7 @@
 - [단계별 구현 가이드](#단계별-구현-가이드)
 - [Q&A 상세 답변](#qa-상세-답변)
 - [관리자 운영 가이드](#관리자-운영-가이드)
+- [⚠️ 보안 주의사항](#보안-주의사항)
 - [리소스 정리](#리소스-정리)
 - [참고 문서](#참고-문서)
 
@@ -56,6 +57,7 @@ flowchart TB
         end
 
         subgraph Triggers["Lambda Triggers"]
+            PreSignUp["Pre Sign-Up<br/>도메인 검증 (보안)"]
             PostConfirm["Post Confirmation<br/>내부/외부 자동 판별"]
             PreToken["Pre Token Generation<br/>커스텀 클레임 추가"]
         end
@@ -112,9 +114,17 @@ sequenceDiagram
     end
 
     Note over Cognito,Lambda: 최초 가입 시
-    Cognito->>Lambda: Post Confirmation Trigger
-    Lambda->>Lambda: 내부/외부 사용자 판별
-    Lambda->>Cognito: 그룹 할당 & Attribute 설정
+    Cognito->>Lambda: Pre Sign-Up Trigger
+    Lambda->>Lambda: 이메일 도메인 검증
+    alt 도메인 허용됨
+        Lambda->>Cognito: 가입 진행
+        Cognito->>Lambda: Post Confirmation Trigger
+        Lambda->>Lambda: 내부/외부 사용자 판별
+        Lambda->>Cognito: 그룹 할당 & Attribute 설정
+    else 도메인 차단됨
+        Lambda-->>Cognito: 가입 거부 (Exception)
+        Cognito-->>User: 오류: 허용되지 않은 도메인
+    end
 
     Note over Cognito,Lambda: 토큰 발급 시
     Cognito->>Lambda: Pre Token Generation
@@ -136,14 +146,22 @@ sequenceDiagram
 stateDiagram-v2
     [*] --> SignUp: 회원가입
 
-    SignUp --> PostConfirmation: Lambda Trigger
+    SignUp --> PreSignUp: Pre Sign-Up Trigger
+
+    state PreSignUp {
+        [*] --> DomainCheck: 이메일 도메인 확인
+        DomainCheck --> Allowed: 허용 도메인
+        DomainCheck --> Blocked: 비허용 도메인
+    }
+
+    Blocked --> [*]: 가입 거부 (보안)
+
+    Allowed --> PostConfirmation: Post Confirmation Trigger
 
     state PostConfirmation {
-        [*] --> CheckEmail: 이메일 도메인 확인
-        CheckEmail --> Internal: 사내 도메인
-        CheckEmail --> CheckEmployeeId: 외부 도메인
-        CheckEmployeeId --> Internal: 유효한 사번
-        CheckEmployeeId --> External: 사번 없음
+        [*] --> CheckInternal: 내부 사용자 판별
+        CheckInternal --> Internal: 사내 도메인 또는 사번
+        CheckInternal --> External: 외부 사용자
     }
 
     Internal --> InternalUsers: internal-users 그룹
@@ -632,6 +650,87 @@ ID Token의 `cognito:groups` 클레임으로 권한 분기
 
 ---
 
+### IP 기반 사용자 구분
+
+#### Q19. IP 기반 내부/외부 사용자 구분
+
+**질문**: IP 주소를 기반으로 내부 사용자와 외부 사용자를 구분할 수 있나요?
+
+**답변**: **기술적으로 가능하지만 제약사항이 있습니다.**
+
+##### Lambda Trigger에서 IP 접근
+
+```python
+def lambda_handler(event, context):
+    source_ip = event.get('callerContext', {}).get('sourceIp', '')
+```
+
+##### IP 기반 구분의 한계점
+
+| 상황 | 문제점 |
+|------|--------|
+| **재택근무자** | 사내 IP가 아닌 가정용 IP 사용 |
+| **VPN 사용자** | VPN 서버 IP로 보이거나, 터널링 후 IP가 달라짐 |
+| **모바일 사용자** | 이동 중 IP가 계속 변경됨 |
+| **NAT/Proxy** | 여러 사용자가 동일 IP로 보임 |
+| **CloudFront/ALB 경유** | 실제 IP가 X-Forwarded-For 헤더에 있음 |
+
+##### 권장 접근 방식 (하이브리드)
+
+```mermaid
+flowchart TD
+    A[사용자 가입/로그인] --> B{1차: 이메일 도메인 + 사번}
+    B -->|내부 확정| C[internal-users 그룹]
+    B -->|불확실| D{2차: IP 대역 체크}
+    D -->|사내 IP| C
+    D -->|외부 IP| E{3차: 관리자 수동 승인}
+    E -->|승인| F[external-users 그룹]
+    E -->|거부| G[계정 비활성화]
+```
+
+##### IP 기반 구분 구현 예시
+
+```python
+import ipaddress
+
+# config.env에서 INTERNAL_IP_RANGES 환경변수로 설정
+INTERNAL_IP_RANGES = os.environ.get('INTERNAL_IP_RANGES', '10.0.0.0/8,172.16.0.0/12,192.168.0.0/16').split(',')
+
+def is_internal_ip(ip_str):
+    try:
+        ip = ipaddress.ip_address(ip_str)
+        for cidr in INTERNAL_IP_RANGES:
+            if ip in ipaddress.ip_network(cidr.strip()):
+                return True
+    except ValueError:
+        pass
+    return False
+```
+
+##### 대안: 접근 제어 레벨에서 IP 체크
+
+| 방식 | 설명 |
+|------|------|
+| **AWS WAF** | API Gateway/ALB 앞단에서 IP 기반 접근 제어 |
+| **VPN 필수화** | 민감 서비스는 VPN 접속 시에만 허용 |
+| **Lambda Authorizer** | API 호출 시점에 IP 체크 |
+
+##### 방식별 비교
+
+| 방식 | 장점 | 단점 |
+|------|------|------|
+| **이메일/사번 기반** (현재) | 안정적, 위치 무관 | 개인 이메일 사용 시 구분 불가 |
+| **IP 기반** | 네트워크 레벨 구분 | 재택/VPN/모바일 대응 어려움 |
+| **하이브리드** | 다중 검증으로 정확도 향상 | 구현 복잡도 증가 |
+
+**결론**: 사내 네트워크에서만 접속하는 환경이라면 IP 기반이 유효하지만, 재택근무나 모바일 접속이 있다면 **이메일 도메인 + 사번** 방식이 더 안정적입니다.
+
+**참고 문서:**
+- [Pre authentication Lambda trigger](https://docs.aws.amazon.com/cognito/latest/developerguide/user-pool-lambda-pre-authentication.html)
+- [AWS WAF](https://docs.aws.amazon.com/waf/latest/developerguide/what-is-aws-waf.html)
+
+---
+
 ## 관리자 운영 가이드
 
 ### 사용자 조회
@@ -664,6 +763,61 @@ aws cognito-idp admin-add-user-to-group \
   --username "user@example.com" \
   --group-name "external-users"
 ```
+
+---
+
+## 보안 주의사항
+
+### ⚠️ 자가등록(Self-Registration) 보안
+
+이 프로젝트는 **자가등록을 허용**하되 **Pre-Sign-Up Lambda로 도메인을 검증**하는 방식을 사용합니다.
+
+```mermaid
+flowchart LR
+    A[회원가입 시도] --> B{Pre-Sign-Up Lambda}
+    B -->|허용 도메인| C[가입 진행]
+    B -->|비허용 도메인| D[가입 차단]
+    C --> E{Post Confirmation}
+    E -->|내부 사용자| F[즉시 승인]
+    E -->|외부 사용자| G[승인 대기]
+```
+
+### 필수 설정
+
+`config.env`에서 반드시 설정해야 하는 보안 관련 변수:
+
+| 변수명 | 설명 | 예시 |
+|--------|------|------|
+| `ALLOWED_SIGNUP_DOMAINS` | 회원가입 허용 도메인 목록 | `company.co.kr,partner.com` |
+| `INTERNAL_EMAIL_DOMAINS` | 내부 사용자 판별 도메인 | `company.co.kr` |
+
+```bash
+# 예시: config.env
+ALLOWED_SIGNUP_DOMAINS=your-company.co.kr,partner-agency.com,advertiser.co.kr
+INTERNAL_EMAIL_DOMAINS=your-company.co.kr
+```
+
+### Lambda Trigger 실행 순서
+
+| 순서 | Trigger | 기능 | 실행 시점 |
+|------|---------|------|----------|
+| 1 | **Pre Sign-Up** | 이메일 도메인 검증 | 회원가입 시도 시 |
+| 2 | **Post Confirmation** | 내부/외부 판별, 그룹 할당 | 이메일 인증 완료 후 |
+| 3 | **Pre Token Generation** | 커스텀 클레임 추가 | 토큰 발급 시 (매 로그인) |
+
+### 보안 체크리스트
+
+- [ ] `ALLOWED_SIGNUP_DOMAINS`가 설정되어 있는지 확인
+- [ ] Pre-Sign-Up Lambda가 User Pool에 연결되어 있는지 확인
+- [ ] 허용 도메인 목록이 비즈니스 요구사항과 일치하는지 확인
+- [ ] CloudWatch Logs에서 차단된 가입 시도 모니터링
+
+### 설정하지 않으면 어떻게 되나요?
+
+`ALLOWED_SIGNUP_DOMAINS`를 설정하지 않으면:
+- **모든 회원가입이 차단됩니다** (보안 기본값)
+- Lambda 로그에 경고 메시지가 기록됩니다
+- 관리자가 직접 생성한 계정(AdminCreateUser)은 영향 없음
 
 ---
 
