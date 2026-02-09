@@ -94,7 +94,7 @@ Cognito User Pool은 다음 프로토콜을 지원합니다:
 ### Q4. 로그인(SNS) 이후, 추가 회원 정보를 입력받아 Cognito 사용자 정보로 저장·수정하는 것이 가능한가요?
 
 **질문 상세:**
-- 외부 고객/파트너 여부, 회사명, 사번 등 추가 회원 정보
+- 광고주/대행사 여부, 광고주명, 사번 등 추가 회원 정보
 - 사용자 본인 / 관리자 / 서버(API) 각 주체별 가능 범위와 권장 방식
 
 **답변:**
@@ -567,3 +567,335 @@ Lambda Trigger → 커스텀 로깅 (DynamoDB, S3, OpenSearch 등)
 | CloudTrail 로깅 | https://docs.aws.amazon.com/cognito/latest/developerguide/logging-using-cloudtrail.html |
 | Amazon Verified Permissions | https://docs.aws.amazon.com/verifiedpermissions/latest/userguide/what-is-avp.html |
 | Cognito API Reference | https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/Welcome.html |
+
+---
+
+# Additional Q&A
+
+## Q1. Custom UI만 사용하면 소셜 로그인(SNS)은 불가능한가?
+
+**A. 네, 맞습니다. Custom UI만 사용하는 경우 소셜 로그인은 불가능합니다.**
+
+### ❌ Custom UI만 사용 시 불가능
+- Facebook 로그인
+- Google 로그인  
+- Amazon 로그인
+- Apple 로그인
+- SAML IdP
+- OIDC IdP
+
+### ✅ Custom UI만 사용 시 가능
+- 이메일/비밀번호 인증 (InitiateAuth API)
+- 전화번호/비밀번호 인증
+- Custom Authentication Flow (Lambda 트리거 사용)
+- WebAuthn/Passkey 인증
+
+### 이유
+소셜 로그인은 OAuth 2.0 프로토콜을 사용하는데, Cognito의 `/oauth2/idpresponse` 엔드포인트가 필요합니다. 이 엔드포인트는 Hosted UI를 활성화해야만 생성됩니다.
+
+---
+
+## Q2. Custom UI에서 소셜 로그인을 사용하려면?
+
+**A. Custom UI에서 Hosted UI의 OAuth 엔드포인트를 호출하는 방식으로 구현합니다.**
+
+### 구현 예시
+
+```javascript
+// Custom UI의 소셜 로그인 버튼 클릭 시
+function loginWithGoogle() {
+    const cognitoDomain = 'https://your-domain.auth.ap-northeast-2.amazoncognito.com';
+    const clientId = 'your-app-client-id';
+    const redirectUri = 'https://your-app.com/callback';
+    
+    // Hosted UI의 OAuth 엔드포인트로 리다이렉트
+    window.location.href = `${cognitoDomain}/oauth2/authorize?` +
+        `identity_provider=Google&` +
+        `redirect_uri=${redirectUri}&` +
+        `response_type=code&` +
+        `client_id=${clientId}&` +
+        `scope=openid email profile`;
+}
+
+function loginWithFacebook() {
+    // identity_provider=Facebook으로 변경
+    window.location.href = `${cognitoDomain}/oauth2/authorize?` +
+        `identity_provider=Facebook&` +
+        `redirect_uri=${redirectUri}&` +
+        `response_type=code&` +
+        `client_id=${clientId}`;
+}
+```
+
+### 플로우
+1. 사용자가 Custom UI에서 "Google 로그인" 버튼 클릭
+2. Custom UI → Hosted UI OAuth 엔드포인트로 리다이렉트
+3. Hosted UI → Google 로그인 페이지로 리다이렉트
+4. Google 인증 완료 → Hosted UI로 콜백
+5. Hosted UI → 설정한 redirect_uri로 인증 코드 반환
+6. Custom UI에서 인증 코드로 토큰 교환
+
+**핵심:** Hosted UI의 로그인 화면은 보이지 않고, 바로 소셜 IdP로 리다이렉트됩니다.
+
+---
+
+## Q3. Verified Permissions (Cedar)는 권장되는가?
+
+**A. 복잡한 권한 관리가 필요한 경우 매우 권장되지만, 프로젝트 상황에 따라 판단해야 합니다.**
+
+### ✅ 권장되는 경우
+
+**1. 복잡한 권한 로직이 필요한 경우**
+```cedar
+// 예: 리소스 소유자이거나, 같은 팀이면서 편집 권한이 있는 경우
+permit(
+    principal,
+    action == Action::"editDocument",
+    resource
+) when {
+    principal == resource.owner ||
+    (principal.team == resource.team && principal.role == "editor")
+};
+```
+
+**2. 다중 애플리케이션/테넌트 환경**
+- 각 애플리케이션마다 다른 권한 정책 필요
+- 테넌트별로 독립적인 권한 관리
+- 리소스 기반 접근 제어 (RBAC + ABAC)
+
+**3. 권한 정책을 코드와 분리하고 싶은 경우**
+- 개발자가 아닌 보안팀/운영팀이 정책 관리
+- 정책 변경 시 코드 배포 없이 즉시 적용
+- 정책 버전 관리 및 감사 로그
+
+**4. 세밀한 권한 제어 (Fine-grained Authorization)**
+- 문서 A는 읽기만 가능
+- 문서 B는 편집 가능
+- 특정 시간대에만 접근 가능
+- 특정 IP에서만 접근 가능
+
+### ❌ 권장되지 않는 경우
+
+**1. 단순한 역할 기반 권한**
+- admin: 모든 권한
+- user: 읽기만 가능
+- guest: 제한적 읽기
+- → Cognito Groups만으로 충분
+
+**2. 소규모 프로젝트**
+- 사용자 수 < 1000명
+- 애플리케이션 1~2개
+- 권한 구조가 단순함
+
+**3. 빠른 MVP 개발이 필요한 경우**
+- Cedar 정책 언어 학습 시간 필요
+- 초기 설정 및 통합 시간 소요
+
+### 난이도 평가
+
+| 항목 | 난이도 | 설명 |
+|------|--------|------|
+| Cedar 정책 언어 학습 | ⭐⭐⭐ | JSON 기반, 직관적이지만 학습 필요 |
+| Cognito 통합 | ⭐⭐ | Identity Source 설정만 하면 됨 |
+| 정책 작성 | ⭐⭐⭐⭐ | 복잡한 로직은 설계가 어려움 |
+| 디버깅 | ⭐⭐⭐ | 정책 시뮬레이터 제공 |
+
+### 단계별 접근 (추천)
+
+**Phase 1: 시작 단계**
+```
+Cognito Groups만 사용
+- app1-admin, app1-user
+- app2-editor, app2-viewer
+```
+
+**Phase 2: 성장 단계**
+```
+Cognito Groups + DynamoDB
+- Groups: 기본 역할
+- DynamoDB: 리소스별 세부 권한
+```
+
+**Phase 3: 확장 단계**
+```
+Verified Permissions (Cedar) 도입
+- 복잡한 정책 관리
+- 다중 테넌트 지원
+- 감사 로그 및 컴플라이언스
+```
+
+### 결론
+- **✅ Verified Permissions 권장:** 3개 이상의 애플리케이션, 복잡한 권한 로직, 컴플라이언스 요구사항
+- **❌ 과도한 경우:** 단순한 admin/user 구분, 소규모 프로젝트, 빠른 출시 우선
+- **💡 추천:** Cognito Groups로 시작 → 복잡도 증가 시 Verified Permissions 도입
+
+---
+
+## Q4. Pre Token Generation Lambda란?
+
+**A. Cognito가 JWT 토큰을 생성하기 직전에 실행되는 Lambda 함수로, 토큰 내용을 커스터마이징할 수 있습니다.**
+
+### 실행 흐름
+
+```
+사용자 로그인 
+    ↓
+Cognito 인증 성공
+    ↓
+🔥 Pre Token Generation Lambda 실행 ← 여기서 토큰 내용 수정!
+    ↓
+JWT 토큰 생성 (ID Token, Access Token)
+    ↓
+클라이언트에 토큰 반환
+```
+
+### 왜 필요한가?
+
+**Custom Attributes는 기본적으로 JWT에 포함되지 않음**
+
+```javascript
+// Cognito User Pool에 저장된 사용자 정보
+{
+  "sub": "123-456-789",
+  "email": "user@example.com",
+  "custom:department": "engineering",      // ❌ JWT에 자동으로 안 들어감
+  "custom:app1_permissions": "read,write", // ❌ JWT에 자동으로 안 들어감
+  "custom:tenant_id": "tenant-123"         // ❌ JWT에 자동으로 안 들어감
+}
+```
+
+**Pre Token Generation Lambda로 JWT에 추가**
+
+```python
+def lambda_handler(event, context):
+    # Cognito가 전달하는 사용자 정보
+    user_attributes = event['request']['userAttributes']
+    
+    # JWT 토큰에 추가할 클레임 지정
+    event['response'] = {
+        'claimsOverrideDetails': {
+            'claimsToAddOrOverride': {
+                # Custom Attributes를 JWT에 추가
+                'department': user_attributes.get('custom:department'),
+                'app1_permissions': user_attributes.get('custom:app1_permissions'),
+                'tenant_id': user_attributes.get('custom:tenant_id'),
+                
+                # 또는 외부 DB에서 조회한 정보 추가
+                'subscription_tier': 'premium',  # DynamoDB에서 조회
+                'feature_flags': ['feature_a', 'feature_b']
+            }
+        }
+    }
+    
+    return event
+```
+
+**결과 JWT 토큰**
+
+```json
+{
+  "sub": "123-456-789",
+  "email": "user@example.com",
+  "cognito:groups": ["app1-admin"],
+  
+  // ✅ Lambda가 추가한 클레임들
+  "department": "engineering",
+  "app1_permissions": "read,write",
+  "tenant_id": "tenant-123",
+  "subscription_tier": "premium",
+  "feature_flags": ["feature_a", "feature_b"]
+}
+```
+
+### 실제 사용 예시
+
+**1. Custom Attributes를 JWT에 추가**
+
+```python
+def lambda_handler(event, context):
+    user_attrs = event['request']['userAttributes']
+    
+    event['response'] = {
+        'claimsOverrideDetails': {
+            'claimsToAddOrOverride': {
+                'department': user_attrs.get('custom:department', 'unknown'),
+                'employee_id': user_attrs.get('custom:employee_id', '')
+            }
+        }
+    }
+    return event
+```
+
+**2. 외부 DB에서 권한 정보 조회 후 추가**
+
+```python
+import boto3
+
+dynamodb = boto3.resource('dynamodb')
+table = dynamodb.Table('UserPermissions')
+
+def lambda_handler(event, context):
+    user_id = event['request']['userAttributes']['sub']
+    
+    # DynamoDB에서 권한 조회
+    response = table.get_item(Key={'userId': user_id})
+    permissions = response.get('Item', {}).get('permissions', [])
+    
+    # JWT에 추가
+    event['response'] = {
+        'claimsOverrideDetails': {
+            'claimsToAddOrOverride': {
+                'permissions': permissions,
+                'last_login': '2026-02-09'
+            }
+        }
+    }
+    return event
+```
+
+**3. 조건부로 그룹 변경**
+
+```python
+def lambda_handler(event, context):
+    user_attrs = event['request']['userAttributes']
+    email = user_attrs.get('email', '')
+    
+    # 관리자 이메일이면 admin 그룹 추가
+    if email.endswith('@company.com'):
+        event['response'] = {
+            'claimsOverrideDetails': {
+                'groupsOverrideDetails': {
+                    'groupsToOverride': ['admin', 'internal-user']
+                }
+            }
+        }
+    
+    return event
+```
+
+### 설정 방법
+
+**AWS Console:**
+1. Cognito User Pool → User pool properties
+2. Lambda triggers → Pre token generation trigger
+3. Lambda 함수 선택
+
+**Terraform/CDK:**
+```python
+# CDK 예시
+user_pool.add_trigger(
+    cognito.UserPoolOperation.PRE_TOKEN_GENERATION,
+    pre_token_lambda
+)
+```
+
+### 핵심 정리
+
+| 항목 | 설명 |
+|------|------|
+| **실행 시점** | JWT 토큰 생성 직전 (로그인/토큰 갱신 시마다) |
+| **용도** | JWT에 커스텀 클레임 추가/수정 |
+| **성능** | 매 로그인마다 실행되므로 빠르게 처리 필요 (< 5초) |
+| **비용** | Lambda 실행 비용 발생 |
+
+**결론: Pre Token Generation Lambda는 JWT 토큰을 커스터마이징하는 유일한 방법입니다.**
